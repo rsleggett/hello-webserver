@@ -1,5 +1,6 @@
 use std::{sync::{mpsc::{self, Receiver, Sender}, Arc, Mutex}, thread};
 
+#[derive(Debug)]
 pub struct PoolCreationError;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
@@ -31,6 +32,9 @@ impl Worker {
     }
 }
 
+///
+/// ThreadPool offers a way to execute jobs in a thread of a given size
+/// 
 pub struct ThreadPool {
     workers: Vec<Worker>,
     sender: Option<Sender<Job>>
@@ -59,6 +63,9 @@ impl ThreadPool {
         ThreadPool { workers, sender: Some(sender) }
     }
 
+    ///
+    /// Builds a ThreadPool or returns a PoolCreationError
+    /// 
     pub fn build(size: usize) -> Result<ThreadPool, PoolCreationError> {
         match size {
             1.. => Ok(ThreadPool::new(size)),
@@ -66,6 +73,9 @@ impl ThreadPool {
         }
     }
 
+    ///
+    /// Run the job on an available thread in the pool
+    /// 
     pub fn execute<F>(&self, f: F) 
     where 
         F: FnOnce() + Send + 'static, 
@@ -89,5 +99,53 @@ impl Drop for ThreadPool {
                 thread.join().unwrap();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::{sync::Condvar, time::Duration};
+
+    use thread::{sleep, Thread};
+
+    use super::*;
+
+    #[test]
+    fn should_build_thread_pool() {
+        let pool = ThreadPool::build(1);
+
+        assert!(pool.is_ok());
+    }
+
+    #[test]
+    fn should_err_when_size_is_0() {
+        let pool= ThreadPool::build(0);
+
+        assert!(pool.is_err());
+    }
+
+    #[test]
+    fn should_run_job_on_pool() {
+        let closed = Arc::new((Mutex::new(0), Condvar::new()));
+        let cloned = Arc::clone(&closed);
+        let job = move || { 
+            let (lock, cvar) = &*cloned;
+            let mut num = lock.lock().unwrap();
+            *num += 1;
+            cvar.notify_one();
+        };
+
+        let pool = ThreadPool::build(1).unwrap();
+
+        pool.execute(job);
+
+        let (lock, cvar) = &*closed;
+        let mut num = lock.lock().unwrap();
+        while *num != 1 {
+            num = cvar.wait(num).unwrap();
+        }
+
+        assert_eq!(*num, 1);
     }
 }
